@@ -145,7 +145,7 @@ class ResNet(nn.Module):
         self,
         block,
         layers,
-        num_channels=3,
+        num_channels=1,
         zero_init_residual=False,
         groups=1,
         widen=1,

@@ -26,53 +26,82 @@ import resnet
 
 
 def get_arguments():
-    parser = argparse.ArgumentParser(description="Pretrain a resnet model with VICReg", add_help=False)
+    parser = argparse.ArgumentParser(
+        description="Pretrain a resnet model with VICReg", add_help=False
+    )
 
     # Data
-    parser.add_argument("--data-dir", type=Path, default="/path/to/imagenet", required=True,
-                        help='Path to the image net dataset')
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default="/path/to/imagenet",
+        required=True,
+        help="Path to the image net dataset",
+    )
 
     # Checkpoints
-    parser.add_argument("--exp-dir", type=Path, default="./exp",
-                        help='Path to the experiment folder, where all logs/checkpoints will be stored')
-    parser.add_argument("--log-freq-time", type=int, default=60,
-                        help='Print logs to the stats.txt file every [log-freq-time] seconds')
+    parser.add_argument(
+        "--exp-dir",
+        type=Path,
+        default="./exp",
+        help="Path to the experiment folder, where all logs/checkpoints will be stored",
+    )
+    parser.add_argument(
+        "--log-freq-time",
+        type=int,
+        default=60,
+        help="Print logs to the stats.txt file every [log-freq-time] seconds",
+    )
 
     # Model
-    parser.add_argument("--arch", type=str, default="resnet50",
-                        help='Architecture of the backbone encoder network')
-    parser.add_argument("--mlp", default="8192-8192-8192",
-                        help='Size and number of layers of the MLP expander head')
+    parser.add_argument(
+        "--arch", type=str, default="resnet50", help="Architecture of the backbone encoder network",
+    )
+    parser.add_argument(
+        "--mlp",
+        default="8192-8192-8192",
+        help="Size and number of layers of the MLP expander head",
+    )
 
     # Optim
-    parser.add_argument("--epochs", type=int, default=100,
-                        help='Number of epochs')
-    parser.add_argument("--batch-size", type=int, default=2048,
-                        help='Effective batch size (per worker batch size is [batch-size] / world-size)')
-    parser.add_argument("--base-lr", type=float, default=0.2,
-                        help='Base learning rate, effective learning after warmup is [base-lr] * [batch-size] / 256')
-    parser.add_argument("--wd", type=float, default=1e-6,
-                        help='Weight decay')
+    parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=2048,
+        help="Effective batch size (per worker batch size is [batch-size] / world-size)",
+    )
+    parser.add_argument(
+        "--base-lr",
+        type=float,
+        default=0.2,
+        help="Base learning rate, effective learning after warmup is [base-lr] * [batch-size] / 256",
+    )
+    parser.add_argument("--wd", type=float, default=1e-6, help="Weight decay")
 
     # Loss
-    parser.add_argument("--sim-coeff", type=float, default=25.0,
-                        help='Invariance regularization loss coefficient')
-    parser.add_argument("--std-coeff", type=float, default=25.0,
-                        help='Variance regularization loss coefficient')
-    parser.add_argument("--cov-coeff", type=float, default=1.0,
-                        help='Covariance regularization loss coefficient')
+    parser.add_argument(
+        "--sim-coeff", type=float, default=25.0, help="Invariance regularization loss coefficient",
+    )
+    parser.add_argument(
+        "--std-coeff", type=float, default=25.0, help="Variance regularization loss coefficient",
+    )
+    parser.add_argument(
+        "--cov-coeff", type=float, default=1.0, help="Covariance regularization loss coefficient",
+    )
 
     # Running
-    parser.add_argument("--num-workers", type=int, default=10)
-    parser.add_argument('--device', default='cuda',
-                        help='device to use for training / testing')
+    parser.add_argument("--num-workers", type=int, default=1)
+    parser.add_argument(
+        "--device", default="cpu", help="device to use for training / testing"  # cuda
+    )
 
     # Distributed
-    parser.add_argument('--world-size', default=1, type=int,
-                        help='number of distributed processes')
-    parser.add_argument('--local_rank', default=-1, type=int)
-    parser.add_argument('--dist-url', default='env://',
-                        help='url used to set up distributed training')
+    parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
+    parser.add_argument("--local_rank", default=-1, type=int)
+    parser.add_argument(
+        "--dist-url", default="env://", help="url used to set up distributed training"
+    )
 
     return parser
 
@@ -125,7 +154,9 @@ def main(args):
         start_epoch = 0
 
     start_time = last_logging = time.time()
+
     scaler = torch.cuda.amp.GradScaler()
+
     for epoch in range(start_epoch, args.epochs):
         sampler.set_epoch(epoch)
         for step, ((x, y), _) in enumerate(loader, start=epoch * len(loader)):
@@ -137,6 +168,7 @@ def main(args):
             optimizer.zero_grad()
             with torch.cuda.amp.autocast():
                 loss = model.forward(x, y)
+
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -155,9 +187,7 @@ def main(args):
                 last_logging = current_time
         if args.rank == 0:
             state = dict(
-                epoch=epoch + 1,
-                model=model.state_dict(),
-                optimizer=optimizer.state_dict(),
+                epoch=epoch + 1, model=model.state_dict(), optimizer=optimizer.state_dict(),
             )
             torch.save(state, args.exp_dir / "model.pth")
     if args.rank == 0:
@@ -169,7 +199,7 @@ def adjust_learning_rate(args, optimizer, loader, step):
     warmup_steps = 10 * len(loader)
     base_lr = args.base_lr * args.batch_size / 256
     if step < warmup_steps:
-        lr = base_lr * step / warmup_steps
+        lr = base_lr * float(step / warmup_steps)
     else:
         step -= warmup_steps
         max_steps -= warmup_steps
@@ -181,14 +211,20 @@ def adjust_learning_rate(args, optimizer, loader, step):
     return lr
 
 
+def set_membership_adjust_learning_rate(optimizer, loss, gamma=1e3):
+    lr = loss / gamma
+
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = lr
+    return lr
+
+
 class VICReg(nn.Module):
     def __init__(self, args):
         super().__init__()
         self.args = args
         self.num_features = int(args.mlp.split("-")[-1])
-        self.backbone, self.embedding = resnet.__dict__[args.arch](
-            zero_init_residual=True
-        )
+        self.backbone, self.embedding = resnet.__dict__[args.arch](zero_init_residual=True)
         self.projector = Projector(args, self.embedding)
 
     def forward(self, x, y):
@@ -197,8 +233,6 @@ class VICReg(nn.Module):
 
         repr_loss = F.mse_loss(x, y)
 
-        x = torch.cat(FullGatherLayer.apply(x), dim=0)
-        y = torch.cat(FullGatherLayer.apply(y), dim=0)
         x = x - x.mean(dim=0)
         y = y - y.mean(dim=0)
 
@@ -208,9 +242,9 @@ class VICReg(nn.Module):
 
         cov_x = (x.T @ x) / (self.args.batch_size - 1)
         cov_y = (y.T @ y) / (self.args.batch_size - 1)
-        cov_loss = off_diagonal(cov_x).pow_(2).sum().div(
-            self.num_features
-        ) + off_diagonal(cov_y).pow_(2).sum().div(self.num_features)
+        cov_loss = off_diagonal(cov_x).pow_(2).sum().div(self.num_features) + off_diagonal(
+            cov_y
+        ).pow_(2).sum().div(self.num_features)
 
         loss = (
             self.args.sim_coeff * repr_loss
@@ -275,17 +309,13 @@ class LARS(optim.Optimizer):
                 if g["weight_decay_filter"] is None or not g["weight_decay_filter"](p):
                     dp = dp.add(p, alpha=g["weight_decay"])
 
-                if g["lars_adaptation_filter"] is None or not g[
-                    "lars_adaptation_filter"
-                ](p):
+                if g["lars_adaptation_filter"] is None or not g["lars_adaptation_filter"](p):
                     param_norm = torch.norm(p)
                     update_norm = torch.norm(dp)
                     one = torch.ones_like(param_norm)
                     q = torch.where(
                         param_norm > 0.0,
-                        torch.where(
-                            update_norm > 0, (g["eta"] * param_norm / update_norm), one
-                        ),
+                        torch.where(update_norm > 0, (g["eta"] * param_norm / update_norm), one),
                         one,
                     )
                     dp = dp.mul(q)
@@ -333,6 +363,6 @@ def handle_sigterm(signum, frame):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser('VICReg training script', parents=[get_arguments()])
+    parser = argparse.ArgumentParser("VICReg training script", parents=[get_arguments()])
     args = parser.parse_args()
     main(args)
